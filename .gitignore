@@ -1,0 +1,9 @@
+# 旧方案（借法语当载体）的归档，只留本地参考，不发布
+archive/
+
+# 本机从 Claude.app 抽出来的中间产物（官方英文原文、待翻清单、批次文件、签名要求缓存）
+extracted/
+
+__pycache__/
+*.pyc
+.DS_Store
