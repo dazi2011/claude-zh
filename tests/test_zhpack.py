@@ -51,6 +51,24 @@ class Merge(unittest.TestCase):
         self.assertEqual(broken, [])
 
 
+class Backups(unittest.TestCase):
+    def test_damaged_backup(self):
+        """备份被第三方清理成空目录时，不能崩，也不能被当成可恢复的备份。"""
+        with tempfile.TemporaryDirectory() as d:
+            broken = Path(d) / "Claude.zh-prev-20260101-000000.app"
+            broken.mkdir()
+            self.assertEqual(zhpack.app_version(broken), "?")
+            self.assertFalse(zhpack.is_intact(broken))
+            ok = Path(d) / "Claude.backup-before-zh-CN-20260101-000000.app"
+            (ok / "Contents" / "MacOS").mkdir(parents=True)
+            (ok / "Contents" / "MacOS" / "Claude").write_bytes(b"")
+            (ok / "Contents" / "Info.plist").write_bytes(
+                zhpack.plistlib.dumps({"CFBundleShortVersionString": "9.9.9"})
+            )
+            self.assertTrue(zhpack.is_intact(ok))
+            self.assertEqual(zhpack.app_version(ok), "9.9.9")
+
+
 @unittest.skipUnless(shutil.which("csreq"), "需要 macOS 的 csreq")
 class Requirement(unittest.TestCase):
     def test_compiles(self):

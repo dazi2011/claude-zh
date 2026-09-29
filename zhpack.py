@@ -128,8 +128,16 @@ def run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess:
 
 
 def app_version(app: Path) -> str:
-    with (app / CONTENTS / "Info.plist").open("rb") as fh:
-        return plistlib.load(fh).get("CFBundleShortVersionString", "?")
+    try:
+        with (app / CONTENTS / "Info.plist").open("rb") as fh:
+            return plistlib.load(fh).get("CFBundleShortVersionString", "?")
+    except (OSError, plistlib.InvalidFileException):
+        return "?"
+
+
+def is_intact(app: Path) -> bool:
+    """备份被别的程序清理过（只剩空目录、缺主程序）就不能拿来恢复。"""
+    return (app / CONTENTS / "Info.plist").is_file() and (app / CONTENTS / "MacOS" / "Claude").is_file()
 
 
 def require_app(app: Path) -> None:
@@ -773,13 +781,14 @@ def backups(app: Path, prefix: str) -> list[Path]:
 
 
 def prune_backups(app: Path) -> None:
-    """官方原版只留最新一份，汉化快照只留最新一份，其余移到废纸篓。"""
-    official = [b for b in backups(app, BACKUP_PREFIX) if is_official_signed(b)]
-    keep = set(official[-1:]) | set(backups(app, SNAPSHOT_PREFIX)[-1:])
+    """官方原版只留最新一份，汉化快照只留最新一份，其余（含已损坏的）移到废纸篓。"""
+    official = [b for b in backups(app, BACKUP_PREFIX) if is_intact(b) and is_official_signed(b)]
+    snapshots = [b for b in backups(app, SNAPSHOT_PREFIX) if is_intact(b)]
+    keep = set(official[-1:]) | set(snapshots[-1:])
     for b in backups(app, BACKUP_PREFIX) + backups(app, SNAPSHOT_PREFIX):
         if b not in keep:
             trash(b)
-            good(f"旧备份移到废纸篓：{b.name}")
+            good(f"{'已损坏的' if not is_intact(b) else '旧'}备份移到废纸篓：{b.name}")
 
 
 def cmd_install(args: argparse.Namespace) -> int:
@@ -857,10 +866,13 @@ def cmd_install(args: argparse.Namespace) -> int:
     if result is None:
         say("    读不了系统 TCC 数据库，跳过诊断。辅助功能 / 屏幕录制不好用时运行：")
         say(f"    python3 {Path(__file__).name} permissions --reset")
-    elif result[0] and not args.no_permissions:
+    elif result[0]:
         for s in result[0]:
             bad(f"{label(s)}：已失效")
-        fix_permissions(app, result[0])
+        if args.no_permissions:
+            say(f"    修复：python3 {Path(__file__).name} permissions --reset")
+        else:
+            fix_permissions(app, result[0])
     else:
         good("没有失效的授权")
 
@@ -874,9 +886,9 @@ def cmd_install(args: argparse.Namespace) -> int:
 
 def cmd_uninstall(args: argparse.Namespace) -> int:
     app: Path = args.app
-    official = [b for b in backups(app, BACKUP_PREFIX) if is_official_signed(b)]
+    official = [b for b in backups(app, BACKUP_PREFIX) if is_intact(b) and is_official_signed(b)]
     if not official:
-        die("找不到官方原版备份。直接从 https://claude.ai/download 下载覆盖安装即可。")
+        die("找不到完好的官方原版备份。直接从 https://claude.ai/download 下载覆盖安装即可。")
     src = official[-1]
     say(f"用官方备份恢复：{src.name}（版本 {app_version(src)}）")
     if args.dry_run:
@@ -929,7 +941,12 @@ def cmd_status(args: argparse.Namespace) -> int:
         say(f"系统权限     : {'，'.join(parts) or '无'}")
     for prefix, what in ((BACKUP_PREFIX, "官方备份"), (SNAPSHOT_PREFIX, "汉化快照")):
         for b in backups(app, prefix):
-            tag = "" if prefix == SNAPSHOT_PREFIX or is_official_signed(b) else "（不是官方签名）"
+            if not is_intact(b):
+                tag = "（已损坏，下次 install 会移到废纸篓）"
+            elif prefix == BACKUP_PREFIX and not is_official_signed(b):
+                tag = "（不是官方签名）"
+            else:
+                tag = ""
             say(f"{what}     : {b.name}  {app_version(b)}{tag}")
     en = app / SHELL_EN_REL
     if en.is_file():

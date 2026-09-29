@@ -49,7 +49,7 @@
 
 ## 环境要求
 
-- macOS（Apple Silicon 或 Intel），Claude Desktop 2.x（在 2.9939.2 上测试）
+- macOS（Apple Silicon 或 Intel），Claude Desktop 2.x（在 2.9939.2、2.9939.4 上测试）
 - Python 3.10+（系统自带或 Homebrew 均可）
 - Node.js（用 `npx @electron/asar` 解包 / 重打包 `app.asar`）
 - Xcode 命令行工具（`codesign`、`csreq`；运行 `xcode-select --install` 安装）
