@@ -137,7 +137,8 @@ def shim_js(locale: str = LOCALE) -> str:
         "return of.call(window,input,Object.assign({},init,{body:JSON.stringify(b)}))}}}"
         "}catch(e){}"
         "var q=of.apply(window,arguments);"
-        "try{if(/^\\/edge-api\\/bootstrap(\\/|$)/.test(p))return q.then(fix)}catch(e){}"
+        # 与官方自己的判断一致：/edge-api/bootstrap 与 /api/bootstrap 都算启动数据
+        "try{if(/^\\/(?:edge-)?api\\/bootstrap(\\/|$)/.test(p))return q.then(fix)}catch(e){}"
         "return q};"
         "try{Object.defineProperty(wrapped,'name',{value:'fetch'})}catch(e){}"
         "window.fetch=wrapped;"

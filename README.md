@@ -4,7 +4,7 @@
 > Claude、Claude Desktop、Anthropic 是 Anthropic PBC 的商标，本文提及仅用于说明兼容对象。
 
 让 macOS 版 Claude Desktop 显示**简体中文**界面：界面主体直接使用 claude.ai 官方的简体中文译文，
-本项目只补上官方还没有翻译的桌面外壳（原生菜单、对话框、托盘、桌面专属设置），
+桌面外壳（原生菜单、对话框、托盘、桌面专属设置）优先用官方自带的中文，官方还没翻译的由本项目补齐，
 并且**不改你的账号语言**、**不影响官方自动更新**。
 
 ![效果图：设置页已是简体中文](docs/screenshot.webp)
@@ -28,7 +28,7 @@
 | 部分 | 来源 | 本项目做的事 |
 |---|---|---|
 | 聊天界面、设置页等主体（约 3.2 万条） | claude.ai 官方 `zh-Hans` 译文，App 运行时自己从 claude.ai 下载 | 让桌面端主窗口使用这份译文 |
-| 桌面外壳（菜单、对话框、托盘等，约 700 条） | 官方没有中文 | 社区翻译，写入 App |
+| 桌面外壳（菜单、对话框、托盘等，约 750 条） | 2.19675.0 起官方自带部分中文（约 85%） | 以官方为准，缺的用社区译文补齐 |
 | 语言选择器 | 官方灰度，大多数账号看不到「中文（简体）」 | 让它常驻选择器，可随时切换 |
 | 官方自动更新 | — | 重签名时保留官方签名要求，更新照常 |
 | 系统权限（辅助功能、屏幕录制等） | 签名变了会失效 | 自动诊断，一键重置后重新授权 |
@@ -49,7 +49,7 @@
 
 ## 环境要求
 
-- macOS（Apple Silicon 或 Intel），Claude Desktop 2.x（在 2.9939.2、2.9939.4 上测试）
+- macOS（Apple Silicon 或 Intel），Claude Desktop 2.x（在 2.9939.2、2.9939.4、2.16120.0、2.19675.0 上测试）
 - Python 3.10+（系统自带或 Homebrew 均可）
 - Node.js（用 `npx @electron/asar` 解包 / 重打包 `app.asar`）
 - Xcode 命令行工具（`codesign`、`csreq`；运行 `xcode-select --install` 安装）
@@ -164,12 +164,16 @@ SPA 登录后按**启动数据**（`/edge-api/bootstrap…` 的响应）顶层�
 ### 3. 桌面外壳
 
 原生菜单、对话框、托盘、桌面专属设置页由 Electron 主进程渲染，它只认
-`Contents/Resources/<locale>.json`（官方没有中文）。SPA 每次切换语言都会调用
+`Contents/Resources/<locale>.json`。SPA 每次切换语言都会调用
 `window.electronIntl.requestLocaleChange(locale)` 通知外壳，外壳找得到 `zh-Hans.json` 就跟着切换，
-找不到就回落英文。所以本项目写入：
+找不到就回落英文。
 
-- `Contents/Resources/zh-Hans.json`：由 `translations/desktop.zh-Hans.json` 按官方英文原文逐键合并而成，
-  缺译或占位符不一致的条目自动回落英文，保证键集完整；
+从 2.19675.0 起官方安装包自带 `zh-Hans.json`，但只覆盖约 85% 的外壳文案（新文案通常要晚一两个版本
+才有官方译文）。所以本项目写入：
+
+- `Contents/Resources/zh-Hans.json`：以官方英文原文为骨架逐键合并，**官方译文优先**，官方没有的用
+  `translations/desktop.zh-Hans.json` 补齐，都没有或占位符不一致的回落英文，保证键集完整。
+  官方原版在 App 还是官方签名时缓存到 `extracted/desktop.zh-Hans.official.json`，同版本重装时使用；
 - `Contents/Resources/zh_CN.lproj/Localizable.strings`：原生 Swift 界面（快速输入等）的字符串；
 - `~/Library/Application Support/Claude/config.json` 的 `locale`：外壳启动时的初始语言。
 
@@ -261,7 +265,7 @@ python3 zhpack.py install                 # 装上
 - `merge` 逐条校验 ICU 占位符（`{name}`、`{count, plural, …}`）和标签（`<link>…</link>`），
   不一致的直接拒绝；
 - 译文与英文相同表示有意保留英文（产品名、缩写等），会记进 `translations/keep-english.json`；
-- 术语和风格约定见 `glossary.json`。注意官方主体译文使用「您」，本仓库的外壳译文按术语表使用「你」。
+- 术语和风格约定见 `glossary.json`。人称统一用「您」，与官方译文（界面主体和外壳）保持一致。
 
 ## 目录结构
 
@@ -296,7 +300,7 @@ node tests/shim.test.mjs
 
 会。译文不在本仓库里，也不在 App 包里：App 每次启动都按 claude.ai 页面声明的版本号
 （`/i18n/zh-Hans.json?v=<哈希>`）从 claude.ai 下载最新的官方目录，官方改进译文你会自动拿到。
-本项目只需要维护外壳那几百条。
+外壳的官方中文随安装包更新，本项目只需要补官方还没翻译的那部分（通常几十到一百多条）。
 
 ### 会影响网页版和手机端吗？
 
@@ -314,7 +318,8 @@ Claude 把本地数据的加密密钥存在钥匙串（「Claude Safe Storage」
 
 ### 官方正式开放中文之后呢？
 
-届时可以直接在官方选择器里选中文，本项目的钩子就没有必要了；外壳中文在官方提供之前仍需本项目。
+届时可以直接在官方选择器里选中文，本项目的钩子就没有必要了；如果那时官方外壳中文已经完整，
+整个补丁都可以不装。
 想恢复官方原版：`python3 zhpack.py uninstall`，或者等下一次官方自动更新。
 
 ### 为什么不借一门现成语言（例如法语）当「载体」，或者直接改英文？

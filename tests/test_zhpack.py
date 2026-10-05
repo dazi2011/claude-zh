@@ -35,10 +35,24 @@ class Merge(unittest.TestCase):
     def test_fallback_to_english(self):
         en = {"a": "Open", "b": "Hi {name}", "c": "Quit"}
         zh = {"a": "打开", "b": "你好 {名字}"}
-        merged, translated, problems = zhpack.merge_catalog(en, zh)
+        merged, counts, problems = zhpack.merge_catalog(en, zh)
         self.assertEqual(merged, {"a": "打开", "b": "Hi {name}", "c": "Quit"})
-        self.assertEqual(translated, 1)
+        self.assertEqual(counts, [1])
         self.assertEqual(len(problems), 1)
+
+    def test_official_first(self):
+        """官方译文优先；官方没有、或官方的坏了，才用社区译文；官方有意保留英文也尊重。"""
+        en = {"a": "Open", "b": "Quit", "c": "Hi {name}", "d": "Claude Code"}
+        official = {"a": "打开", "c": "您好 {nom}", "d": "Claude Code"}
+        ours = {"a": "开启", "b": "退出", "c": "你好 {name}", "d": "克劳德代码"}
+        merged, counts, _ = zhpack.merge_catalog(en, official, ours)
+        self.assertEqual(merged, {"a": "打开", "b": "退出", "c": "你好 {name}", "d": "Claude Code"})
+        self.assertEqual(counts, [2, 2])
+
+    def test_pending(self):
+        en = {"a": "Open", "b": "Quit", "c": "Help", "d": "OK"}
+        todo = zhpack.pending(en, {"a": "打开"}, {"b": "退出", "c": "Help"}, {"d"})
+        self.assertEqual(todo, {"c": "Help"})
 
     def test_shell_translations_are_valid(self):
         """仓库里的外壳译文本身不能有占位符 / 标签损坏。"""

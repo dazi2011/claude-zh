@@ -40,6 +40,9 @@ TRANSLATIONS = ROOT / "translations"
 EXTRACTED = ROOT / "extracted"  # 本机生成的中间产物，不进版本库
 
 SHELL_ZH = TRANSLATIONS / f"desktop.{LOCALE}.json"
+# 官方从 2.19675.0 起自带外壳 zh-Hans.json。装过补丁之后 App 里那份已被合并改写，
+# 所以在 App 还是官方签名时把原版缓存下来，同版本重装时用它。
+OFFICIAL_SHELL_CACHE = EXTRACTED / f"desktop.{LOCALE}.official.json"
 MENU_ZH = TRANSLATIONS / f"menu.{LOCALE}.strings"
 KEEP_EN = TRANSLATIONS / "keep-english.json"
 
@@ -263,35 +266,66 @@ def load_keep_en() -> set[str]:
     return set(load_json(KEEP_EN)) if KEEP_EN.is_file() else set()
 
 
-def merge_catalog(en_map: dict, zh_map: dict) -> tuple[dict, int, list[str]]:
-    """以英文为骨架逐键合并；缺译或占位符损坏的键保留英文，保证键集完备。"""
+def merge_catalog(en_map: dict, *sources: dict) -> tuple[dict, list[int], list[str]]:
+    """以英文为骨架逐键合并，按顺序取第一个可用的来源。
+
+    来源里与英文相同的值视为「有意保留英文」，同样算命中；占位符 / 标签损坏的跳过，
+    都没有就保留英文，保证键集完备。返回（合并结果，各来源命中数，问题列表）。
+    """
     merged: dict[str, Any] = {}
-    translated = 0
+    counts = [0] * len(sources)
     problems: list[str] = []
     for key, en_val in en_map.items():
-        zh_val = zh_map.get(key)
-        if isinstance(en_val, str) and isinstance(zh_val, str) and zh_val != en_val:
-            issue = check_pair(en_val, zh_val)
-            if issue is None:
-                merged[key] = zh_val
-                translated += 1
-                continue
-            problems.append(f"[{key}] {issue}")
         merged[key] = en_val
-    return merged, translated, problems
+        if not isinstance(en_val, str):
+            continue
+        for i, src in enumerate(sources):
+            val = src.get(key)
+            if not isinstance(val, str):
+                continue
+            issue = check_pair(en_val, val)
+            if issue:
+                problems.append(f"[{key}] {issue}")
+                continue
+            merged[key] = val
+            counts[i] += 1
+            break
+    return merged, counts, problems
 
 
-def install_shell_catalog(app: Path) -> None:
+def official_shell(app: Path) -> dict:
+    """官方自带的外壳中文。官方签名的 App 直接读并缓存；已汉化的 App 只认同版本的缓存。"""
+    version = app_version(app)
+    if is_official_signed(app):
+        src = app / SHELL_ZH_REL
+        data = load_json(src) if src.is_file() else {}
+        if data:
+            save_json(OFFICIAL_SHELL_CACHE, {"version": version, "messages": data})
+        return data
+    if OFFICIAL_SHELL_CACHE.is_file():
+        cache = load_json(OFFICIAL_SHELL_CACHE)
+        if cache.get("version") == version:
+            return cache.get("messages", {})
+    return {}
+
+
+def install_shell_catalog(app: Path, official: dict) -> None:
     en_src = app / SHELL_EN_REL
     if not en_src.is_file():
         die(f"找不到外壳英文原文：{en_src}")
-    zh_map = load_json(SHELL_ZH) if SHELL_ZH.is_file() else {}
-    merged, translated, problems = merge_catalog(load_json(en_src), zh_map)
+    ours = load_json(SHELL_ZH) if SHELL_ZH.is_file() else {}
+    # 官方优先：和界面主体的官方译文用词、语气一致；官方还没翻的才用社区译文补
+    merged, (n_off, n_ours), problems = merge_catalog(load_json(en_src), official, ours)
     for line in problems[:10]:
-        warn(f"译文损坏，已回退英文 {line}")
+        warn(f"译文损坏，已跳过 {line}")
     with (app / SHELL_ZH_REL).open("w", encoding="utf-8") as fh:
         json.dump(merged, fh, ensure_ascii=False, separators=(",", ":"))
-    good(f"外壳字典 {SHELL_ZH_REL.name}：中文 {translated} / {len(merged)}")
+    rest = len(merged) - n_off - n_ours
+    good(
+        f"外壳字典 {SHELL_ZH_REL.name}：官方 {n_off} + 社区补充 {n_ours}"
+        + (f" + 英文 {rest}" if rest else "")
+        + f" = {len(merged)}"
+    )
 
 
 STRINGS_RE = re.compile(r'^"((?:[^"\\]|\\.)*)"\s*=\s*"((?:[^"\\]|\\.)*)";', re.M)
@@ -787,8 +821,9 @@ def prune_backups(app: Path) -> None:
     keep = set(official[-1:]) | set(snapshots[-1:])
     for b in backups(app, BACKUP_PREFIX) + backups(app, SNAPSHOT_PREFIX):
         if b not in keep:
+            what = "旧" if is_intact(b) else "已损坏的"  # 移走之前判断，移走之后路径就不存在了
             trash(b)
-            good(f"{'已损坏的' if not is_intact(b) else '旧'}备份移到废纸篓：{b.name}")
+            good(f"{what}备份移到废纸篓：{b.name}")
 
 
 def cmd_install(args: argparse.Namespace) -> int:
@@ -803,6 +838,11 @@ def cmd_install(args: argparse.Namespace) -> int:
         die("这份 app 还带着旧版「法语载体」补丁。先装回官方版（让它自动更新一次，"
             "或从 https://claude.ai/download 覆盖安装）再来。")
 
+    # 必须在复制、改写之前从原 App 读：装过补丁的 App 里那份已被合并改写
+    official = official_shell(app)
+    if not official and not is_official_signed(app):
+        warn("App 已汉化过且没有同版本的官方外壳缓存，外壳只用社区译文")
+
     work_root = Path(tempfile.mkdtemp(prefix="claude-zh-"))
     work = work_root / "Claude.app"
     try:
@@ -810,7 +850,7 @@ def cmd_install(args: argparse.Namespace) -> int:
         run(["ditto", str(app), str(work)])
 
         step("[2/7] 写入外壳字典与原生菜单")
-        install_shell_catalog(work)
+        install_shell_catalog(work, official)
         install_menu(work)
 
         step(f"[3/7] 注入本地语言钩子（app.asar，强制 {LOCALE}，账号不动）")
@@ -951,21 +991,23 @@ def cmd_status(args: argparse.Namespace) -> int:
     en = app / SHELL_EN_REL
     if en.is_file():
         en_map = load_json(en)
-        zh_map = load_json(SHELL_ZH) if SHELL_ZH.is_file() else {}
-        keep = load_keep_en()
-        done = sum(1 for k, v in en_map.items() if k in keep or (k in zh_map and zh_map[k] != v))
-        say(f"外壳译文覆盖 : {done}/{len(en_map)}（待翻 {len(en_map) - done}）")
+        official = official_shell(app)
+        todo = pending(en_map, official, load_json(SHELL_ZH) if SHELL_ZH.is_file() else {}, load_keep_en())
+        done = len(en_map) - len(todo)
+        src = f"官方 {len(set(official) & set(en_map))} 条，其余社区译文" if official else "社区译文"
+        say(f"外壳译文覆盖 : {done}/{len(en_map)}（{src}，待翻 {len(todo)}）")
     return 0
 
 
 # ---------------------------------------------------------------- 翻译工作流（仅外壳）
 
 
-def pending(en_map: dict, zh_map: dict, keep: set[str]) -> dict[str, str]:
+def pending(en_map: dict, official: dict, ours: dict, keep: set[str]) -> dict[str, str]:
+    """官方和社区译文都没覆盖的外壳文案。"""
     return {
         k: v
         for k, v in en_map.items()
-        if isinstance(v, str) and k not in keep and (k not in zh_map or zh_map[k] == v)
+        if isinstance(v, str) and k not in keep and k not in official and (k not in ours or ours[k] == v)
     }
 
 
@@ -976,9 +1018,12 @@ def cmd_extract(args: argparse.Namespace) -> int:
     en_map = load_json(app / SHELL_EN_REL)
     save_json(EXTRACTED / f"desktop.{FALLBACK}.json", en_map)
     zh_map = load_json(SHELL_ZH) if SHELL_ZH.is_file() else {}
-    todo = pending(en_map, zh_map, load_keep_en())
+    official = official_shell(app)
+    todo = pending(en_map, official, zh_map, load_keep_en())
     save_json(EXTRACTED / "todo.desktop.json", todo)
     stale = len(set(zh_map) - set(en_map))
+    if official:
+        good(f"官方自带外壳中文 {len(set(official) & set(en_map))} 条")
     good(f"外壳 {len(en_map)} 条，待翻 {len(todo)} 条 → extracted/todo.desktop.json")
     if stale:
         say(f"    译文里有 {stale} 条键官方已删除，安装时自动忽略")
@@ -998,7 +1043,10 @@ def cmd_batch(args: argparse.Namespace) -> int:
     require_app(app)
     en_map = load_json(app / SHELL_EN_REL)
     zh_map = load_json(SHELL_ZH) if SHELL_ZH.is_file() else {}
-    todo = sorted(pending(en_map, zh_map, load_keep_en()).items(), key=lambda kv: (len(kv[1]), kv[0]))
+    todo = sorted(
+        pending(en_map, official_shell(app), zh_map, load_keep_en()).items(),
+        key=lambda kv: (len(kv[1]), kv[0]),
+    )
     chunk = dict(todo[args.start : args.start + args.size])  # 短的先翻：按钮/菜单性价比最高
     out = EXTRACTED / f"batch.desktop.{args.start}-{args.start + len(chunk)}.json"
     save_json(out, chunk)
@@ -1044,15 +1092,15 @@ def cmd_check(args: argparse.Namespace) -> int:
     ]
     values = [v for v in zh_map.values() if isinstance(v, str)]
     variants = [v for v in values if re.search(r"帐号|帐单|帐户|软体|程式|档案|资讯|伺服器|网路|登入", v)]
-    formal = [v for v in values if "您" in v]
+    informal = [v for v in values if "你" in v]
     say(f"外壳译文 {len(zh_map)} 条，官方已删除的键 {len(set(zh_map) - set(en_map))} 条")
     (bad if broken else good)(f"占位符 / 标签损坏：{len(broken)}")
     for k, issue in broken[:15]:
         say(f"{DIM}    [{k}] {issue}{OFF}")
     if variants:
         warn(f"港台 / 异体用词 {len(variants)} 条：{variants[:3]}")
-    if formal:
-        warn(f"用了「您」{len(formal)} 条（术语表约定用「你」）")
+    if informal:
+        warn(f"用了「你」{len(informal)} 条（与官方一致，约定用「您」）")
     return 1 if broken else 0
 
 

@@ -48,7 +48,7 @@ function page({ pref, accountLocale = "en-US", released = ["en-US", "fr-FR"], ho
         status: 200,
         headers: { "content-type": "application/json", "content-length": "1", date: "Sat, 26 Sep 2026 08:00:00 GMT", ...extra },
       });
-    if (path.startsWith("/edge-api/bootstrap"))
+    if (/^\/(edge-)?api\/bootstrap/.test(path))
       return json({
         account: { uuid: "u" },
         locale: accountLocale,
@@ -81,6 +81,7 @@ const put = (locale) =>
   check(r.headers.get("date") !== null && r.headers.get("content-length") === null, "保留 Date 头、去掉过期的 content-length");
   const r2 = await fetch(new Request("https://claude.ai/edge-api/bootstrap/org/app_start"));
   check((await r2.json()).locale === "zh-Hans", "Request 对象形式也命中");
+  check((await (await fetch("/api/bootstrap/org/app_start")).json()).locale === "zh-Hans", "/api/bootstrap 形式也命中");
   check((await (await fetch("/api/other")).json()).locale === "en-US", "其它接口的响应不动");
   check((await (await fetch("/edge-api/bootstrapper")).json()).locale === "en-US", "相似路径不误伤");
   check(eval(SHIM) === "skip:dup", "重复注入被挡掉");
